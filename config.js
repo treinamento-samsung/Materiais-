@@ -1,7 +1,7 @@
 // ===== CONFIGURAÇÃO DO WEBAPP — preencha seguindo o GUIA =====
 self.CONFIG = {
   // URL do App da Web do Apps Script (termina em /exec)
-  API_URL: 'COLE_AQUI_A_URL_DO_APPS_SCRIPT',
+  API_URL: 'https://script.google.com/macros/s/AKfycbzOrHXSVwH-Kt6L9wU1_loInYHsr8jVNGVcRa8PK5aQLKTm3vPoWopLDe6iygqWZoNA/exec',
 
   // Firebase (só para notificações). Deixe apiKey vazio para usar sem push.
   FIREBASE: {
