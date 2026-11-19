@@ -1,7 +1,7 @@
 // Service worker: deixa o app abrir sem internet e recebe as notificações.
 importScripts('./config.js');
 
-const VERSAO = 'materiais-v2';
+const VERSAO = 'materiais-v3';
 const BASE = ['./', './index.html', './style.css', './app.js', './config.js',
   './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 

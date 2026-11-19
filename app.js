@@ -223,35 +223,100 @@
             <div class="mini" style="background:linear-gradient(135deg, #0A1A6B, ${cor});font-size:${a.tipo === 'pdf' ? 15 : 26}px;font-weight:900">${ico}${a.baixadoEm ? '<span class="ok">✓</span>' : ''}</div>
             <div>
               <div class="nome">${esc(a.nome)}</div>
-              <div class="meta">${tam(a.tamanho)} · ${a.baixadoEm ? 'Baixado em ' + data(a.baixadoEm) : 'Pendente'}${grande ? ' · prefira Wi-Fi' : ''}</div>
-              <div class="botoes">
-                <a class="botao branco pequeno" target="_blank" rel="noopener" data-arq="${esc(a.id)}" href="${esc(a.abrir)}">${a.tipo === 'video' ? '▶ Assistir' : 'Abrir'}</a>
-                <a class="botao sec pequeno" target="_blank" rel="noopener" data-arq="${esc(a.id)}" href="${esc(a.baixar)}">⬇ Baixar</a>
+              <div class="meta">${tam(a.tamanho)} · ${a.baixadoEm ? 'Baixado em ' + data(a.baixadoEm)
+                : a.abertoEm ? 'Aberto em ' + data(a.abertoEm) + ' · falta baixar' : 'Pendente'}${grande ? ' · prefira Wi-Fi' : ''}</div>
+              <div class="barra" data-prog="${esc(a.id)}" hidden style="margin-top:8px"><i style="width:0%"></i></div>
+              <div class="botoes" data-botoes="${esc(a.id)}">
+                <button class="botao branco pequeno" data-baixar="${esc(a.id)}">${a.baixadoEm ? '⬇ Baixar de novo' : '⬇ Baixar'}</button>
+                <a class="botao sec pequeno" target="_blank" rel="noopener" data-abrir="${esc(a.id)}" href="${esc(a.abrir)}">${a.tipo === 'video' ? '▶ Assistir online' : 'Ver online'}</a>
               </div>
             </div>
           </div>`;
         }).join('')}
-        <p class="sub" style="margin-top:18px">Arquivos grandes: o Google Drive pode avisar que "não foi possível verificar vírus". Toque em <b>Fazer o download assim mesmo</b>.</p>
+        <p class="sub" style="margin-top:18px">Toque em <b>Baixar</b> e espere a barra chegar ao fim: o arquivo vai para a pasta <b>Downloads</b> do celular e só então conta como baixado. "Ver online" não conta como download.</p>
       </div>`;
 
-    // O link abre direto (sem bloqueio de pop-up); o registro vai em paralelo.
-    $app.querySelectorAll('a[data-arq]').forEach((el) => {
-      el.addEventListener('click', () => registrar(r.id, el.dataset.arq));
+    // "Ver online" abre o Drive direto (sem bloqueio de pop-up) e registra só como "abriu".
+    $app.querySelectorAll('a[data-abrir]').forEach((el) => {
+      el.addEventListener('click', () => registrar(r.id, el.dataset.abrir, { tipo: 'abriu' }));
+    });
+    $app.querySelectorAll('button[data-baixar]').forEach((btn) => {
+      const a = r.arquivos.find((x) => x.id === btn.dataset.baixar);
+      btn.addEventListener('click', () => baixarNoApp(r, a, btn));
     });
   }
 
-  function registrar(releaseId, arquivoId) {
+  // ---------- download dentro do app (confirma que chegou inteiro) ----------
+  const baixando = new Set();
+
+  async function baixarNoApp(r, a, btn) {
+    if (baixando.has(a.id)) return;
+    if (!C.DRIVE_API_KEY) return trocarPorLinkDrive(r, a, btn, 'download no app ainda não configurado');
+    if (!navigator.onLine) { toast('Sem internet. Conecte-se para baixar.'); return; }
+    const barra = $app.querySelector(`[data-prog="${CSS.escape(a.id)}"]`);
+    baixando.add(a.id);
+    btn.disabled = true;
+    if (barra) barra.hidden = false;
+    try {
+      const resp = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(a.id) +
+        '?alt=media&supportsAllDrives=true&key=' + encodeURIComponent(C.DRIVE_API_KEY));
+      if (!resp.ok || !resp.body) throw new Error('o Drive respondeu ' + resp.status);
+      const total = a.tamanho || Number(resp.headers.get('content-length')) || 0;
+      let recebidos = 0;
+      const contador = new TransformStream({
+        transform(pedaco, ctl) {
+          recebidos += pedaco.byteLength;
+          const pct = total ? Math.min(100, Math.floor((recebidos / total) * 100)) : 0;
+          btn.textContent = total ? `Baixando ${pct}%` : `Baixando ${tam(recebidos)}`;
+          if (barra) barra.firstElementChild.style.width = pct + '%';
+          ctl.enqueue(pedaco);
+        },
+      });
+      // O navegador guarda o arquivo em disco enquanto baixa (funciona com vídeo grande).
+      const blob = await new Response(resp.body.pipeThrough(contador)).blob();
+      if (total && blob.size !== total) throw new Error('chegou incompleto');
+
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = a.nome;
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 120000);
+
+      baixando.delete(a.id);
+      registrar(r.id, a.id, { tipo: 'concluido', bytes: blob.size });
+      toast('✓ ' + a.nome + ' baixado.\nEstá na pasta Downloads do aparelho.', 5000);
+    } catch (e) {
+      baixando.delete(a.id);
+      if (barra) barra.hidden = true;
+      btn.disabled = false;
+      btn.textContent = '⬇ Tentar de novo';
+      toast('Não foi possível baixar (' + e.message + '). Verifique a internet e toque em "Tentar de novo".', 6000);
+    }
+  }
+
+  // Sem chave configurada: baixa pelo link do Drive (o sistema não consegue confirmar a conclusão).
+  function trocarPorLinkDrive(r, a, btn, motivo) {
+    registrar(r.id, a.id, { tipo: 'abriu' });
+    window.open(a.baixar, '_blank', 'noopener');
+    toast('Abrindo o download pelo Google Drive (' + motivo + ').', 5000);
+  }
+
+  function registrar(releaseId, arquivoId, extra) {
+    extra = extra || { tipo: 'abriu' };
     // atualiza a tela na hora
     const d = ler(K.dados);
     const r = d && d.releases.find((x) => x.id === releaseId);
     const a = r && r.arquivos.find((x) => x.id === arquivoId);
-    if (a && !a.baixadoEm) {
-      a.baixadoEm = new Date().toISOString();
+    if (a) {
+      const agora = new Date().toISOString();
+      a.abertoEm = agora;
+      if (extra.tipo === 'concluido') a.baixadoEm = agora;
       r.concluida = r.arquivos.length > 0 && r.arquivos.every((x) => x.baixadoEm);
       gravar(K.dados, d);
-      setTimeout(render, 400);
+      // não redesenha a tela enquanto houver outro download em andamento
+      setTimeout(() => { if (!baixando.size) render(); }, 400);
     }
-    const item = { releaseId, arquivoId };
+    const item = { releaseId, arquivoId, tipo: extra.tipo, bytes: extra.bytes };
     if (!navigator.onLine) { gravar(K.fila, [...ler(K.fila, []), item]); return; }
     api('registrarDownload', item).catch(() => gravar(K.fila, [...ler(K.fila, []), item]));
   }
@@ -530,12 +595,12 @@
         res.innerHTML = `
           <div class="numeros"><div><b>${r.fizeram}</b><span>fizeram</span></div><div><b>${r.faltam}</b><span>faltam</span></div><div><b>${r.total}</b><span>arquivos</span></div></div>
           <div class="linha-acoes" style="margin-bottom:12px"><button class="sec pequeno" id="csv">Baixar planilha (CSV)</button></div>
-          <div class="tabela-wrap"><table><thead><tr><th>Nome</th><th>BU</th><th>Baixados</th><th>Status</th><th>Último</th></tr></thead><tbody>
-          ${r.linhas.map((l) => `<tr><td>${esc(l.nome)}</td><td>${esc(l.bu)}</td><td>${l.baixados}/${l.total}</td>
+          <div class="tabela-wrap"><table><thead><tr><th>Nome</th><th>BU</th><th>Baixados</th><th>Só abriu</th><th>Status</th><th>Último download</th></tr></thead><tbody>
+          ${r.linhas.map((l) => `<tr><td>${esc(l.nome)}</td><td>${esc(l.bu)}</td><td>${l.baixados}/${l.total}</td><td>${Math.max(0, (l.abertos || 0) - l.baixados)}</td>
             <td>${l.fez ? '<span class="tag ok">FEZ</span>' : '<span class="tag pend">FALTA</span>'}</td><td>${data(l.ultima)}</td></tr>`).join('')}
           </tbody></table></div>`;
         document.getElementById('csv').onclick = () => baixarCsv('relatorio.csv',
-          [['Nome', 'E-mail', 'BU', 'Baixados', 'Total', 'Status', 'Último']].concat(r.linhas.map((l) => [l.nome, l.email, l.bu, l.baixados, l.total, l.fez ? 'FEZ' : 'FALTA', data(l.ultima)])));
+          [['Nome', 'E-mail', 'BU', 'Baixados', 'Total', 'Só abriu', 'Status', 'Último download']].concat(r.linhas.map((l) => [l.nome, l.email, l.bu, l.baixados, l.total, Math.max(0, (l.abertos || 0) - l.baixados), l.fez ? 'FEZ' : 'FALTA', data(l.ultima)])));
       } catch (err) { res.innerHTML = `<div class="erro">${esc(err.message)}</div>`; }
     };
   }
